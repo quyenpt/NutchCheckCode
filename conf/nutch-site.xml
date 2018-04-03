@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<!-- Put site-specific property overrides in this file. -->
+
+<configuration>
+<property>
+ <name>http.agent.name</name>
+ <value>toshiba</value>
+</property>
+<property>
+     <name>http.robots.agents</name>
+     <value>toshiba,*</value>
+</property>
+<property>
+     <name>plugin.includes</name>
+     <value>protocol-http|protocol-httpclient|urlfilter-regex|parse-(text|html|js|tika)|index-(basic|anchor)|indexer-solr|query-(basic|site|url)|response-(json|xml)|summary-basic|scoring-opic|urlnormalizer-(pass|regex|basic)|language-identifier|analysis-(en)</value>
+</property>
+<property>
+     <name>langdetect.profile.dir</name>
+     <value>/abc/user/ubuntu/nutch/profiles</value>
+</property>
+</configuration>
