@@ -93,6 +93,7 @@ public class ParseUtil {
       	parseResult = runParser(parsers[i], content);
       else 
       	parseResult = parsers[i].getParse(content);
+
       if (parseResult != null && !parseResult.isEmpty())
         return parseResult;
     }

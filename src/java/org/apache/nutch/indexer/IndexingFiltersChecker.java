@@ -17,22 +17,19 @@
  
 package org.apache.nutch.indexer;
 
-import java.util.Arrays;
 import java.util.List;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.nutch.crawl.CrawlDatum;
 import org.apache.nutch.crawl.Inlinks;
-import org.apache.nutch.indexer.IndexingException;
-import org.apache.nutch.indexer.IndexingFilters;
-import org.apache.nutch.indexer.NutchDocument;
+import org.apache.nutch.crawl.SignatureFactory;
 import org.apache.nutch.metadata.Metadata;
+import org.apache.nutch.metadata.Nutch;
 import org.apache.nutch.parse.Parse;
 import org.apache.nutch.parse.ParseResult;
 import org.apache.nutch.parse.ParseSegment;
@@ -42,7 +39,10 @@ import org.apache.nutch.protocol.Protocol;
 import org.apache.nutch.protocol.ProtocolFactory;
 import org.apache.nutch.protocol.ProtocolOutput;
 import org.apache.nutch.util.NutchConfiguration;
+import org.apache.nutch.util.StringUtil;
 import org.apache.nutch.util.URLUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Reads and parses a URL and run the indexers on it. Displays the fields obtained and the first
@@ -63,15 +63,25 @@ public class IndexingFiltersChecker extends Configured implements Tool {
   public int run(String[] args) throws Exception {
     String contentType = null;
     String url = null;
+    boolean dumpText = false;
 
-    String usage = "Usage: IndexingFiltersChecker <url>";
+    String usage = "Usage: IndexingFiltersChecker [-dumpText] <url>";
 
-    if (args.length != 1) {
+    if (args.length == 0) {
       System.err.println(usage);
       return -1;
     }
 
-    url = URLUtil.toASCII(args[0]);
+    for (int i = 0; i < args.length; i++) {
+      if (args[i].equals("-dumpText")) {
+        dumpText = true;
+      } else if (i != args.length - 1) {
+        System.err.println(usage);
+        System.exit(-1);
+      } else {
+        url = URLUtil.toASCII(args[i]);
+      }
+    }
 
     if (LOG.isInfoEnabled()) {
       LOG.info("fetching: " + url);
@@ -84,6 +94,8 @@ public class IndexingFiltersChecker extends Configured implements Tool {
     CrawlDatum datum = new CrawlDatum();
 
     ProtocolOutput output = protocol.getProtocolOutput(new Text(url), datum);
+    
+    IndexWriters writers = new IndexWriters(getConf());
     
     if (!output.getStatus().isSuccess()) {
       System.out.println("Fetch failed with protocol status: " + output.getStatus());
@@ -118,10 +130,19 @@ public class IndexingFiltersChecker extends Configured implements Tool {
     ParseResult parseResult = new ParseUtil(conf).parse(content);
 
     NutchDocument doc = new NutchDocument();
+    doc.add("id", url);
     Text urlText = new Text(url);
 
     Inlinks inlinks = null;
     Parse parse = parseResult.get(urlText);
+
+    byte[] signature = SignatureFactory.getSignature(conf).calculate(content,
+        parse);
+    parse.getData().getContentMeta()
+        .set(Nutch.SIGNATURE_KEY, StringUtil.toHexString(signature));
+    String digest = parse.getData().getContentMeta().get(Nutch.SIGNATURE_KEY);
+    doc.add("digest", digest);
+
     try {
       doc = indexers.filter(doc, parse, urlText, datum, inlinks);
     } catch (IndexingException e) {
@@ -138,11 +159,18 @@ public class IndexingFiltersChecker extends Configured implements Tool {
       if (values != null) {
         for (Object value : values) {
           String str = value.toString();
-          int minText = Math.min(100, str.length());
+          int minText = dumpText ? str.length() : Math.min(100, str.length());
           System.out.println(fname + " :\t" + str.substring(0, minText));
         }
       }
     }
+    
+    if (conf.getBoolean("doIndex", false) && doc!=null){
+    	writers.open(new JobConf(getConf()), "IndexingFilterChecker");
+    	writers.write(doc);
+    	writers.close();
+    }
+    
     return 0;
   }
 

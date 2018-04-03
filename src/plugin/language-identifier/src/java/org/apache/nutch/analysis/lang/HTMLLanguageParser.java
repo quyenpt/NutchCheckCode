@@ -87,33 +87,29 @@ public class HTMLLanguageParser implements HtmlParseFilter {
      */
     public ParseResult filter(Content content, ParseResult parseResult,
             HTMLMetaTags metaTags, DocumentFragment doc) {
-    	LOG.info("Running_Function: filter");
         String lang = null;
 
         Parse parse = parseResult.get(content.getUrl());
-        LOG.info("Running_Function: filter: _"+detect+"_"+identify);
-//        if (detect >= 0 && identify < 0) {
-//            lang = detectLanguage(parse, doc);
-//        } else if (detect < 0 && identify >= 0) {
-//            lang = identifyLanguage(parse);
-//        } else if (detect < identify) {
-//            lang = detectLanguage(parse, doc);
-//            if (lang == null) {
-//                lang = identifyLanguage(parse);
-//            }
-//        } else if (identify < detect) {
-//            lang = identifyLanguage(parse);
-//            if (lang == null) {
-//                lang = detectLanguage(parse, doc);
-//            }
-//        } else {
-//            LOG.warn("No configuration for language extraction policy is provided");
-//            return parseResult;
-//        }
-        lang = identifyLanguage(parse);
-        if (lang == null) {
-        	lang = detectLanguage(parse, doc);
+
+        if (detect >= 0 && identify < 0) {
+            lang = detectLanguage(parse, doc);
+        } else if (detect < 0 && identify >= 0) {
+            lang = identifyLanguage(parse);
+        } else if (detect < identify) {
+            lang = detectLanguage(parse, doc);
+            if (lang == null) {
+                lang = identifyLanguage(parse);
+            }
+        } else if (identify < detect) {
+            lang = identifyLanguage(parse);
+            if (lang == null) {
+                lang = detectLanguage(parse, doc);
+            }
+        } else {
+            LOG.warn("No configuration for language extraction policy is provided");
+            return parseResult;
         }
+
         if (lang != null) {
             parse.getData().getParseMeta().set(Metadata.LANGUAGE, lang);
             return parseResult;
@@ -124,7 +120,6 @@ public class HTMLLanguageParser implements HtmlParseFilter {
 
     /** Try to find the document's language from page headers and metadata */
     private String detectLanguage(Parse page, DocumentFragment doc) {
-    	LOG.info("Running_Function: detectLanguage");
         String lang = getLanguageFromMetadata(page.getData().getParseMeta());
         if (lang == null) {
             LanguageParser parser = new LanguageParser(doc);
@@ -142,7 +137,6 @@ public class HTMLLanguageParser implements HtmlParseFilter {
 
     /** Use statistical language identification to extract page language */
     private String identifyLanguage(Parse parse) {
-    	LOG.info("Running_Function: identifyLanguage");
         StringBuilder text = new StringBuilder();
         if (parse == null)
             return null;
@@ -163,8 +157,7 @@ public class HTMLLanguageParser implements HtmlParseFilter {
         if (this.contentMaxlength != -1
                 && titleandcontent.length() > this.contentMaxlength)
             titleandcontent = titleandcontent.substring(0, contentMaxlength);
-        
-        LOG.info("tite_and_conten_print: "+titleandcontent);
+
         LanguageIdentifier identifier = new LanguageIdentifier(titleandcontent);
 
         if (onlyCertain) {
@@ -289,7 +282,7 @@ public class HTMLLanguageParser implements HtmlParseFilter {
          * found.
          */
         final static String parseLanguage(String lang) {
-        	LOG.info("Lang content:"+lang);
+
             if (lang == null) {
                 return null;
             }
@@ -316,7 +309,6 @@ public class HTMLLanguageParser implements HtmlParseFilter {
     }
 
     public void setConf(Configuration conf) {
-    	LOG.info("Running_Function: setConf");
         this.conf = conf;
         contentMaxlength = conf.getInt("lang.analyze.max.length", -1);
         onlyCertain = conf.getBoolean("lang.identification.only.certain", false);
@@ -331,7 +323,6 @@ public class HTMLLanguageParser implements HtmlParseFilter {
     }
 
     public Configuration getConf() {
-    	LOG.info("Running_Function: getConf");
         return this.conf;
     }
 

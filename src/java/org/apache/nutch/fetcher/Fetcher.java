@@ -133,6 +133,8 @@ public class Fetcher extends Configured implements Tool,
   FetchItemQueues fetchQueues;
   QueueFeeder feeder;
 
+  LinkedList<FetcherThread> fetcherThreads = new LinkedList<FetcherThread>();
+
   /**
    * This class described the item to be fetched.
    */
@@ -226,7 +228,7 @@ public class Fetcher extends Configured implements Tool,
    */
   private static class FetchItemQueue {
     List<FetchItem> queue = Collections.synchronizedList(new LinkedList<FetchItem>());
-    Set<FetchItem>  inProgress = Collections.synchronizedSet(new HashSet<FetchItem>());
+    AtomicInteger  inProgress = new AtomicInteger();
     AtomicLong nextFetchTime = new AtomicLong();
     AtomicInteger exceptionCounter = new AtomicInteger();
     long crawlDelay;
@@ -254,7 +256,7 @@ public class Fetcher extends Configured implements Tool,
     }
 
     public int getInProgressSize() {
-      return inProgress.size();
+      return inProgress.get();
     }
 
     public int incrementExceptionCounter() {
@@ -263,7 +265,7 @@ public class Fetcher extends Configured implements Tool,
 
     public void finishFetchItem(FetchItem it, boolean asap) {
       if (it != null) {
-        inProgress.remove(it);
+        inProgress.decrementAndGet();
         setEndTime(System.currentTimeMillis(), asap);
       }
     }
@@ -275,18 +277,18 @@ public class Fetcher extends Configured implements Tool,
 
     public void addInProgressFetchItem(FetchItem it) {
       if (it == null) return;
-      inProgress.add(it);
+      inProgress.incrementAndGet();
     }
 
     public FetchItem getFetchItem() {
-      if (inProgress.size() >= maxThreads) return null;
+      if (inProgress.get() >= maxThreads) return null;
       long now = System.currentTimeMillis();
       if (nextFetchTime.get() > now) return null;
       FetchItem it = null;
       if (queue.size() == 0) return null;
       try {
         it = queue.remove(0);
-        inProgress.add(it);
+        inProgress.incrementAndGet();
       } catch (Exception e) {
         LOG.error("Cannot remove FetchItem from queue or cannot add it to inProgress queue", e);
       }
@@ -295,7 +297,7 @@ public class Fetcher extends Configured implements Tool,
 
     public synchronized void dump() {
       LOG.info("  maxThreads    = " + maxThreads);
-      LOG.info("  inProgress    = " + inProgress.size());
+      LOG.info("  inProgress    = " + inProgress.get());
       LOG.info("  crawlDelay    = " + crawlDelay);
       LOG.info("  minCrawlDelay = " + minCrawlDelay);
       LOG.info("  nextFetchTime = " + nextFetchTime.get());
@@ -593,6 +595,8 @@ public class Fetcher extends Configured implements Tool,
 
     private int outlinksDepthDivisor;
     private boolean skipTruncated;
+    
+    private boolean halted = false;
 
     public FetcherThread(Configuration conf) {
       this.setDaemon(true);                       // don't hang JVM on exit
@@ -635,6 +639,13 @@ public class Fetcher extends Configured implements Tool,
       try {
 
         while (true) {
+          // check whether must be stopped
+          if (isHalted()) {
+            LOG.debug(getName() + " set to halted");
+            fit = null;
+            return;
+          }
+          
           fit = fetchQueues.getFetchItem();
           if (fit == null) {
             if (feeder.isAlive() || fetchQueues.getTotalSize() > 0) {
@@ -648,6 +659,7 @@ public class Fetcher extends Configured implements Tool,
               continue;
             } else {
               // all done, finish this thread
+              LOG.info("Thread " + getName() + " has no more work available");
               return;
             }
           }
@@ -731,25 +743,7 @@ public class Fetcher extends Configured implements Tool,
                                    refreshTime < Fetcher.PERM_REFRESH_TIME,
                                    Fetcher.CONTENT_REDIR);
                   if (redirUrl != null) {
-                    CrawlDatum newDatum = new CrawlDatum(CrawlDatum.STATUS_DB_UNFETCHED,
-                        fit.datum.getFetchInterval(), fit.datum.getScore());
-                    // transfer existing metadata to the redir
-                    newDatum.getMetaData().putAll(fit.datum.getMetaData());
-                    scfilters.initialScore(redirUrl, newDatum);
-                    if (reprUrl != null) {
-                      newDatum.getMetaData().put(Nutch.WRITABLE_REPR_URL_KEY,
-                          new Text(reprUrl));
-                    }
-                    fit = FetchItem.create(redirUrl, newDatum, queueMode);
-                    if (fit != null) {
-                      FetchItemQueue fiq =
-                        fetchQueues.getFetchItemQueue(fit.queueID);
-                      fiq.addInProgressFetchItem(fit);
-                    } else {
-                      // stop redirecting
-                      redirecting = false;
-                      reporter.incrCounter("FetcherStatus", "FetchItem.notCreated.redirect", 1);
-                    }
+                    queueRedirect(redirUrl, fit);
                   }
                 }
                 break;
@@ -772,25 +766,7 @@ public class Fetcher extends Configured implements Tool,
                                  urlString, newUrl, temp,
                                  Fetcher.PROTOCOL_REDIR);
                 if (redirUrl != null) {
-                  CrawlDatum newDatum = new CrawlDatum(CrawlDatum.STATUS_DB_UNFETCHED,
-                      fit.datum.getFetchInterval(), fit.datum.getScore());
-                  // transfer existing metadata
-                  newDatum.getMetaData().putAll(fit.datum.getMetaData());
-                  scfilters.initialScore(redirUrl, newDatum);
-                  if (reprUrl != null) {
-                    newDatum.getMetaData().put(Nutch.WRITABLE_REPR_URL_KEY,
-                        new Text(reprUrl));
-                  }
-                  fit = FetchItem.create(redirUrl, newDatum, queueMode);
-                  if (fit != null) {
-                    FetchItemQueue fiq =
-                      fetchQueues.getFetchItemQueue(fit.queueID);
-                    fiq.addInProgressFetchItem(fit);
-                  } else {
-                    // stop redirecting
-                    redirecting = false;
-                    reporter.incrCounter("FetcherStatus", "FetchItem.notCreated.redirect", 1);
-                  }
+                  queueRedirect(redirUrl, fit);
                 } else {
                   // stop redirecting
                   redirecting = false;
@@ -915,6 +891,28 @@ public class Fetcher extends Configured implements Tool,
               (newUrl != null ? "to same url" : "filtered"));
         }
         return null;
+      }
+    }
+
+    private void queueRedirect(Text redirUrl, FetchItem fit) throws ScoringFilterException {
+      CrawlDatum newDatum = new CrawlDatum(CrawlDatum.STATUS_DB_UNFETCHED,
+          fit.datum.getFetchInterval(), fit.datum.getScore());
+      // transfer all existing metadata to the redirect
+      newDatum.getMetaData().putAll(fit.datum.getMetaData());
+      scfilters.initialScore(redirUrl, newDatum);
+      if (reprUrl != null) {
+        newDatum.getMetaData().put(Nutch.WRITABLE_REPR_URL_KEY,
+            new Text(reprUrl));
+      }
+      fit = FetchItem.create(redirUrl, newDatum, queueMode);
+      if (fit != null) {
+        FetchItemQueue fiq =
+          fetchQueues.getFetchItemQueue(fit.queueID);
+        fiq.addInProgressFetchItem(fit);
+      } else {
+        // stop redirecting
+        redirecting = false;
+        reporter.incrCounter("FetcherStatus", "FetchItem.notCreated.redirect", 1);
       }
     }
 
@@ -1111,6 +1109,14 @@ public class Fetcher extends Configured implements Tool,
       return null;
     }
 
+    public synchronized void setHalted(boolean halted) {
+      this.halted = halted;
+    }
+
+    public synchronized boolean isHalted() {
+      return halted;
+    }
+    
   }
 
   public Fetcher() { super(null); }
@@ -1124,20 +1130,21 @@ public class Fetcher extends Configured implements Tool,
 
 
   private void reportStatus(int pagesLastSec, int bytesLastSec) throws IOException {
-    String status;
-    long elapsed = (System.currentTimeMillis() - start)/1000;
+    StringBuilder status = new StringBuilder();
+    Long elapsed = new Long((System.currentTimeMillis() - start)/1000);
 
-    float avgPagesSec = Math.round(((float)pages.get()*10)/elapsed)/10;
-    float avgBytesSec = Math.round(((((float)bytes.get())*8)/1000)/elapsed);
+    float avgPagesSec =  (float) pages.get() / elapsed.floatValue();
+    long avgBytesSec =  (bytes.get() /125l) / elapsed.longValue();
 
-    status = activeThreads + " threads, " +
-     fetchQueues.getQueueCount() + " queues, "+
-     fetchQueues.getTotalSize() + " URLs queued, "+
-      pages+" pages, "+errors+" errors, "
-      + avgPagesSec + " (" + pagesLastSec + ") pages/s, "
-      + avgBytesSec + " (" + bytesLastSec + ") kbits/s, ";
+    status.append(activeThreads).append(" threads (").append(spinWaiting.get()).append(" waiting), ");
+    status.append(fetchQueues.getQueueCount()).append(" queues, ");
+    status.append(fetchQueues.getTotalSize()).append(" URLs queued, ");
+    status.append(pages).append(" pages, ").append(errors).append(" errors, ");
+    status.append(String.format("%.2f", avgPagesSec)).append(" pages/s (");
+    status.append(pagesLastSec).append(" last sec), ");
+    status.append(avgBytesSec).append(" kbits/s (").append((bytesLastSec / 125)).append(" last sec)");
 
-    reporter.setStatus(status);
+    reporter.setStatus(status.toString());
   }
 
   public void configure(JobConf job) {
@@ -1191,7 +1198,9 @@ public class Fetcher extends Configured implements Tool,
     getConf().setBoolean(Protocol.CHECK_ROBOTS, false);
 
     for (int i = 0; i < threadCount; i++) {       // spawn threads
-      new FetcherThread(getConf()).start();
+      FetcherThread t = new FetcherThread(getConf());
+      fetcherThreads.add(t);
+      t.start();
     }
 
     // select a timeout that avoids a task timeout
@@ -1210,7 +1219,24 @@ public class Fetcher extends Configured implements Tool,
     int throughputThresholdMaxRetries = getConf().getInt("fetcher.throughput.threshold.retries", 5);
     if (LOG.isInfoEnabled()) { LOG.info("Fetcher: throughput threshold retries: " + throughputThresholdMaxRetries); }
     long throughputThresholdTimeLimit = getConf().getLong("fetcher.throughput.threshold.check.after", -1);
-
+    
+    int targetBandwidth = getConf().getInt("fetcher.bandwidth.target", -1) * 1000;
+    int maxNumThreads = getConf().getInt("fetcher.maxNum.threads", threadCount);
+    if (maxNumThreads < threadCount){
+      LOG.info("fetcher.maxNum.threads can't be < than "+ threadCount + " : using "+threadCount+" instead");
+      maxNumThreads = threadCount;
+    }
+    int bandwidthTargetCheckEveryNSecs  = getConf().getInt("fetcher.bandwidth.target.check.everyNSecs", 30);
+    if (bandwidthTargetCheckEveryNSecs < 1){
+      LOG.info("fetcher.bandwidth.target.check.everyNSecs can't be < to 1 : using 1 instead");
+      bandwidthTargetCheckEveryNSecs = 1;
+    }
+    
+    int maxThreadsPerQueue = getConf().getInt("fetcher.threads.per.queue", 1);
+    
+    int bandwidthTargetCheckCounter = 0;
+    long bytesAtLastBWTCheck = 0l;
+    
     do {                                          // wait for threads to exit
       pagesLastSec = pages.get();
       bytesLastSec = (int)bytes.get();
@@ -1227,7 +1253,7 @@ public class Fetcher extends Configured implements Tool,
       reportStatus(pagesLastSec, bytesLastSec);
 
       LOG.info("-activeThreads=" + activeThreads + ", spinWaiting=" + spinWaiting.get()
-          + ", fetchQueues.totalSize=" + fetchQueues.getTotalSize());
+          + ", fetchQueues.totalSize=" + fetchQueues.getTotalSize()+ ", fetchQueues.getQueueCount="+fetchQueues.getQueueCount());
 
       if (!feeder.isAlive() && fetchQueues.getTotalSize() < 5) {
         fetchQueues.dump();
@@ -1255,6 +1281,57 @@ public class Fetcher extends Configured implements Tool,
           }
         }
       }
+      
+      // adjust the number of threads if a target bandwidth has been set
+      if (targetBandwidth>0) {
+        if (bandwidthTargetCheckCounter < bandwidthTargetCheckEveryNSecs) bandwidthTargetCheckCounter++;
+        else if (bandwidthTargetCheckCounter == bandwidthTargetCheckEveryNSecs){  	
+          long bpsSinceLastCheck = ((bytes.get() - bytesAtLastBWTCheck) * 8)/bandwidthTargetCheckEveryNSecs;
+
+          bytesAtLastBWTCheck = bytes.get();
+          bandwidthTargetCheckCounter = 0;
+
+          int averageBdwPerThread = 0;
+          if (activeThreads.get()>0)
+            averageBdwPerThread = Math.round(bpsSinceLastCheck/activeThreads.get());   
+
+          LOG.info("averageBdwPerThread : "+(averageBdwPerThread/1000) + " kbps");
+
+          if (bpsSinceLastCheck < targetBandwidth && averageBdwPerThread > 0){
+            // check whether it is worth doing e.g. more queues than threads
+
+            if ((fetchQueues.getQueueCount() * maxThreadsPerQueue) > activeThreads.get()){
+             
+              long remainingBdw = targetBandwidth - bpsSinceLastCheck;
+              int additionalThreads = Math.round(remainingBdw/averageBdwPerThread);
+              int availableThreads = maxNumThreads - activeThreads.get();
+
+              // determine the number of available threads (min between availableThreads and additionalThreads)
+              additionalThreads = (availableThreads < additionalThreads ? availableThreads:additionalThreads);
+              LOG.info("Has space for more threads ("+(bpsSinceLastCheck/1000) +" vs "+(targetBandwidth/1000)+" kbps) \t=> adding "+additionalThreads+" new threads");
+              // activate new threads
+              for (int i = 0; i < additionalThreads; i++) {
+                FetcherThread thread = new FetcherThread(getConf());
+                fetcherThreads.add(thread);
+                thread.start();
+              }
+            }
+          }
+          else if (bpsSinceLastCheck > targetBandwidth && averageBdwPerThread > 0){
+            // if the bandwidth we're using is greater then the expected bandwidth, we have to stop some threads
+            long excessBdw = bpsSinceLastCheck - targetBandwidth;
+            int excessThreads = Math.round(excessBdw/averageBdwPerThread);
+            LOG.info("Exceeding target bandwidth ("+bpsSinceLastCheck/1000 +" vs "+(targetBandwidth/1000)+" kbps). \t=> excessThreads = "+excessThreads);
+            // keep at least one
+            if (excessThreads >= fetcherThreads.size()) excessThreads = 0;
+            // de-activates threads
+            for (int i = 0; i < excessThreads; i++) {
+              FetcherThread thread = fetcherThreads.removeLast();
+              thread.setHalted(true);
+            }
+          }
+        }
+      }
 
       // check timelimit
       if (!feeder.isAlive()) {
@@ -1267,6 +1344,21 @@ public class Fetcher extends Configured implements Tool,
       if ((System.currentTimeMillis() - lastRequestStart.get()) > timeout) {
         if (LOG.isWarnEnabled()) {
           LOG.warn("Aborting with "+activeThreads+" hung threads.");
+          for (int i = 0; i < fetcherThreads.size(); i++) {
+            FetcherThread thread = fetcherThreads.get(i);
+            if (thread.isAlive()) {
+              LOG.warn("Thread #" + i + " hung while processing " + thread.reprUrl);
+              if (LOG.isDebugEnabled()) {
+                StackTraceElement[] stack = thread.getStackTrace();
+                StringBuilder sb = new StringBuilder();
+                sb.append("Stack of thread #").append(i).append(":\n");
+                for (StackTraceElement s : stack) {
+                  sb.append(s.toString()).append('\n');
+                }
+                LOG.debug(sb.toString());
+              }
+            }
+          }
         }
         return;
       }
@@ -1383,10 +1475,7 @@ public class Fetcher extends Configured implements Tool,
   }
 
   private void checkConfiguration() {
-
-    // ensure that a value has been set for the agent name and that that
-    // agent name is the first value in the agents we advertise for robot
-    // rules parsing
+    // ensure that a value has been set for the agent name
     String agentName = getConf().get("http.agent.name");
     if (agentName == null || agentName.trim().length() == 0) {
       String message = "Fetcher: No agents listed in 'http.agent.name'"
@@ -1395,25 +1484,6 @@ public class Fetcher extends Configured implements Tool,
         LOG.error(message);
       }
       throw new IllegalArgumentException(message);
-    } else {
-
-      // get all of the agents that we advertise
-      String agentNames = getConf().get("http.robots.agents");
-      StringTokenizer tok = new StringTokenizer(agentNames, ",");
-      ArrayList<String> agents = new ArrayList<String>();
-      while (tok.hasMoreTokens()) {
-        agents.add(tok.nextToken().trim());
-      }
-
-      // if the first one is not equal to our agent name, log fatal and throw
-      // an exception
-      if (!(agents.get(0)).equalsIgnoreCase(agentName)) {
-        String message = "Fetcher: Your 'http.agent.name' value should be "
-            + "listed first in 'http.robots.agents' property.";
-        if (LOG.isWarnEnabled()) {
-          LOG.warn(message);
-        }
-      }
     }
   }
 

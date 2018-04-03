@@ -104,8 +104,6 @@ public class ParseResult implements Iterable<Map.Entry<Text, Parse>> {
    * @param data corresponding parse metadata of this result
    */
   public void put(Text key, ParseText text, ParseData data) {
-	LOG.info("Debug_n: put text key: "+key.toString());
-	LOG.info("Debug_n: put parseText: "+ text.toString());
     put(key.toString(), text, data);
   }
   
@@ -117,9 +115,6 @@ public class ParseResult implements Iterable<Map.Entry<Text, Parse>> {
    */
   public void put(String key, ParseText text, ParseData data) {
     parseMap.put(new Text(key), new ParseImpl(text, data, key.equals(originalUrl)));
-    LOG.info("Debug_n: put string key: "+key.toString());
-	LOG.info("Debug_n: put parseText: "+ text.toString());
-	//final String unescapedText = HtmlEscape.unescapeHtml(escapedText);
   }
 
   /**

@@ -19,6 +19,9 @@ package org.apache.nutch.protocol.http.api;
 // JDK imports
 import java.io.IOException;
 import java.net.URL;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 // Logging imports
 import org.slf4j.Logger;
@@ -43,9 +46,6 @@ import org.apache.hadoop.io.Text;
 // crawler-commons imports
 import crawlercommons.robots.BaseRobotRules;
 
-/**
- * @author J&eacute;r&ocirc;me Charron
- */
 public abstract class HttpBase implements Protocol {
   
   public static final Text RESPONSE_TIME = new Text("_rs_");
@@ -103,6 +103,12 @@ public abstract class HttpBase implements Protocol {
   
   /** Skip page if Crawl-Delay longer than this value. */
   protected long maxCrawlDelay = -1L;
+  
+  /** Which TLS/SSL protocols to support */
+  protected Set<String> tlsPreferredProtocols;
+  
+  /** Which TLS/SSL cipher suites to support */
+  protected Set<String> tlsPreferredCipherSuites;
 
   /** Creates a new instance of HttpBase */
   public HttpBase() {
@@ -133,6 +139,32 @@ public abstract class HttpBase implements Protocol {
       this.useHttp11 = conf.getBoolean("http.useHttp11", false);
       this.responseTime = conf.getBoolean("http.store.responsetime", true);
       this.robots.setConf(conf);
+      
+      String[] protocols = conf.getStrings("http.tls.supported.protocols", "TLSv1.2", "TLSv1.1", "TLSv1", "SSLv3");
+      String[] ciphers = conf.getStrings("http.tls.supported.cipher.suites", 
+          "TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384","TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",
+          "TLS_RSA_WITH_AES_256_CBC_SHA256","TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA384","TLS_ECDH_RSA_WITH_AES_256_CBC_SHA384",
+          "TLS_DHE_RSA_WITH_AES_256_CBC_SHA256","TLS_DHE_DSS_WITH_AES_256_CBC_SHA256","TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",
+          "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA","TLS_RSA_WITH_AES_256_CBC_SHA","TLS_ECDH_ECDSA_WITH_AES_256_CBC_SHA",
+          "TLS_ECDH_RSA_WITH_AES_256_CBC_SHA","TLS_DHE_RSA_WITH_AES_256_CBC_SHA","TLS_DHE_DSS_WITH_AES_256_CBC_SHA",
+          "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256","TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256","TLS_RSA_WITH_AES_128_CBC_SHA256",
+          "TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA256","TLS_ECDH_RSA_WITH_AES_128_CBC_SHA256","TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",
+          "TLS_DHE_DSS_WITH_AES_128_CBC_SHA256","TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA","TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",
+          "TLS_RSA_WITH_AES_128_CBC_SHA","TLS_ECDH_ECDSA_WITH_AES_128_CBC_SHA","TLS_ECDH_RSA_WITH_AES_128_CBC_SHA",
+          "TLS_DHE_RSA_WITH_AES_128_CBC_SHA","TLS_DHE_DSS_WITH_AES_128_CBC_SHA","TLS_ECDHE_ECDSA_WITH_RC4_128_SHA",
+          "TLS_ECDHE_RSA_WITH_RC4_128_SHA","SSL_RSA_WITH_RC4_128_SHA","TLS_ECDH_ECDSA_WITH_RC4_128_SHA",
+          "TLS_ECDH_RSA_WITH_RC4_128_SHA","TLS_ECDHE_ECDSA_WITH_3DES_EDE_CBC_SHA","TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA",
+          "SSL_RSA_WITH_3DES_EDE_CBC_SHA","TLS_ECDH_ECDSA_WITH_3DES_EDE_CBC_SHA","TLS_ECDH_RSA_WITH_3DES_EDE_CBC_SHA",
+          "SSL_DHE_RSA_WITH_3DES_EDE_CBC_SHA","SSL_DHE_DSS_WITH_3DES_EDE_CBC_SHA","SSL_RSA_WITH_RC4_128_MD5",
+          "TLS_EMPTY_RENEGOTIATION_INFO_SCSV","TLS_RSA_WITH_NULL_SHA256","TLS_ECDHE_ECDSA_WITH_NULL_SHA",
+          "TLS_ECDHE_RSA_WITH_NULL_SHA","SSL_RSA_WITH_NULL_SHA","TLS_ECDH_ECDSA_WITH_NULL_SHA","TLS_ECDH_RSA_WITH_NULL_SHA",
+          "SSL_RSA_WITH_NULL_MD5","SSL_RSA_WITH_DES_CBC_SHA","SSL_DHE_RSA_WITH_DES_CBC_SHA","SSL_DHE_DSS_WITH_DES_CBC_SHA",
+          "TLS_KRB5_WITH_RC4_128_SHA","TLS_KRB5_WITH_RC4_128_MD5","TLS_KRB5_WITH_3DES_EDE_CBC_SHA","TLS_KRB5_WITH_3DES_EDE_CBC_MD5",
+          "TLS_KRB5_WITH_DES_CBC_SHA","TLS_KRB5_WITH_DES_CBC_MD5");
+
+      tlsPreferredProtocols = new HashSet<String>(Arrays.asList(protocols));
+      tlsPreferredCipherSuites = new HashSet<String>(Arrays.asList(ciphers));
+
       logConf();
   }
 
@@ -164,9 +196,6 @@ public abstract class HttpBase implements Protocol {
       
       if (code == 200) { // got a good response
         return new ProtocolOutput(c); // return it
-        
-      } else if (code == 410) { // page is gone
-        return new ProtocolOutput(c, new ProtocolStatus(ProtocolStatus.GONE, "Http: " + code + " url=" + url));
         
       } else if (code >= 300 && code < 400) { // handle redirect
         String location = response.getHeader("Location");
@@ -206,7 +235,7 @@ public abstract class HttpBase implements Protocol {
       } else if (code == 404) {
         return new ProtocolOutput(c, new ProtocolStatus(ProtocolStatus.NOTFOUND, u));
       } else if (code == 410) { // permanently GONE
-        return new ProtocolOutput(c, new ProtocolStatus(ProtocolStatus.GONE, u));
+        return new ProtocolOutput(c, new ProtocolStatus(ProtocolStatus.GONE, "Http: " + code + " url=" + u));
       } else {
         return new ProtocolOutput(c, new ProtocolStatus(ProtocolStatus.EXCEPTION, "Http code=" + code + ", url="
                 + u));
@@ -261,6 +290,14 @@ public abstract class HttpBase implements Protocol {
     return useHttp11;
   }
   
+  public Set<String> getTlsPreferredCipherSuites() {
+    return tlsPreferredCipherSuites;
+  }
+  
+  public Set<String> getTlsPreferredProtocols() {
+    return tlsPreferredProtocols;
+  }
+
   private static String getAgentString(String agentName,
                                        String agentVersion,
                                        String agentDesc,
@@ -322,6 +359,11 @@ public abstract class HttpBase implements Protocol {
 
     if (LOGGER.isTraceEnabled()) { LOGGER.trace("uncompressing...."); }
 
+    // content can be empty (i.e. redirection) in which case
+    // there is nothing to unzip
+    if (compressed.length == 0)
+      return compressed;
+    
     byte[] content;
     if (getMaxContent() >= 0) {
         content = GZIPUtils.unzipBestEffort(compressed, getMaxContent());
@@ -342,6 +384,11 @@ public abstract class HttpBase implements Protocol {
 
   public byte[] processDeflateEncoded(byte[] compressed, URL url) throws IOException {
 
+    // content can be empty (i.e. redirection) in which case
+    // there is nothing to deflate
+    if (compressed.length == 0)
+      return compressed;
+    
     if (LOGGER.isTraceEnabled()) { LOGGER.trace("inflating...."); }
 
     byte[] content = DeflateUtils.inflateBestEffort(compressed, getMaxContent());
