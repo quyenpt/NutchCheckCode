@@ -14,7 +14,7 @@
 </property>
 <property>
      <name>plugin.includes</name>
-     <value>protocol-http|protocol-httpclient|urlfilter-regex|parse-(text|html|js|tika)|index-(basic|anchor)|indexer-solr|query-(basic|site|url)|response-(json|xml)|summary-basic|scoring-opic|urlnormalizer-(pass|regex|basic)|language-identifier|analysis-(en)</value>
+     <value>protocol-http|protocol-httpclient|urlfilter-regex|parse-(text|html|js|tika)|index-(basic|anchor)|indexer-solr|query-(basic|site|url)|response-(json|xml)|summary-basic|scoring-opic|urlnormalizer-(pass|regex|basic)|language-identifier|analysis-(fr|en)</value>
 </property>
 <property>
      <name>langdetect.profile.dir</name>

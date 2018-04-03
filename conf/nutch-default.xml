@@ -76,11 +76,11 @@
 
   NOTE: You should also check other related properties:
 
-	http.robots.agents
-	http.agent.description
-	http.agent.url
-	http.agent.email
-	http.agent.version
+    http.robots.agents
+    http.agent.description
+    http.agent.url
+    http.agent.email
+    http.agent.version
 
   and set their values appropriately.
 
@@ -89,11 +89,18 @@
 
 <property>
   <name>http.robots.agents</name>
-  <value>*</value>
-  <description>The agent strings we'll look for in robots.txt files,
-  comma-separated, in decreasing order of precedence. You should
-  put the value of http.agent.name as the first agent name, and keep the
-  default * at the end of the list. E.g.: BlurflDev,Blurfl,*
+  <value></value>
+  <description>Any other agents, apart from 'http.agent.name', that the robots
+  parser would look for in robots.txt. Multiple agents can be provided using 
+  comma as a delimiter. eg. mybot,foo-spider,bar-crawler
+  
+  The ordering of agents does NOT matter and the robots parser would make 
+  decision based on the agent which matches first to the robots rules.  
+  Also, there is NO need to add a wildcard (ie. "*") to this string as the 
+  robots parser would smartly take care of a no-match situation. 
+    
+  If no value is specified, by default HTTP agent (ie. 'http.agent.name') 
+  would be used for user agent matching by the robots parser. 
   </description>
 </property>
 
@@ -135,7 +142,7 @@
 
 <property>
   <name>http.agent.version</name>
-  <value>Nutch-1.8</value>
+  <value>Nutch-1.9</value>
   <description>A version string to advertise in the User-Agent 
    header.</description>
 </property>
@@ -345,7 +352,6 @@
 </property>
 
 <!-- web db properties -->
-
 <property>
   <name>db.fetch.interval.default</name>
   <value>2592000</value>
@@ -447,6 +453,18 @@
   <description>If true, updatedb will add purge records with status DB_GONE
   from the CrawlDB.
   </description>
+</property>
+
+<property>
+    <name>db.url.normalizers</name>
+    <value>false</value>
+    <description>Normalize urls when updating crawldb</description>
+</property>
+
+<property>
+    <name>db.url.filters</name>
+    <value>false</value>
+    <description>Filter urls when updating crawldb</description>
 </property>
 
 <property>
@@ -666,7 +684,10 @@
   <name>fetcher.server.delay</name>
   <value>5.0</value>
   <description>The number of seconds the fetcher will delay between 
-   successive requests to the same server.</description>
+   successive requests to the same server. Note that this might get
+   overriden by a Crawl-Delay from a robots.txt and is used ONLY if 
+   fetcher.threads.per.queue is set to 1.
+   </description>
 </property>
 
 <property>
@@ -674,7 +695,7 @@
   <value>0.0</value>
   <description>The minimum number of seconds the fetcher will delay between 
   successive requests to the same server. This value is applicable ONLY
-  if fetcher.threads.per.host is greater than 1 (i.e. the host blocking
+  if fetcher.threads.per.queue is greater than 1 (i.e. the host blocking
   is turned off).</description>
 </property>
 
@@ -705,7 +726,11 @@
   <name>fetcher.threads.per.queue</name>
   <value>1</value>
   <description>This number is the maximum number of threads that
-    should be allowed to access a queue at one time.
+    should be allowed to access a queue at one time. Setting it to 
+    a value > 1 will cause the Crawl-Delay value from robots.txt to
+    be ignored and the value of fetcher.server.min.delay to be used
+    as a delay between successive requests to the same server instead 
+    of fetcher.server.delay.
    </description>
 </property>
 
@@ -836,6 +861,28 @@
   <description>Whether to ignore or follow external links. Set db.ignore.external.links to false and this to true to store outlinks
   in the output but not follow them. If db.ignore.external.links is true this directive is ignored.
   </description>
+</property>
+
+<property>
+  <name>fetcher.bandwidth.target</name>
+  <value>-1</value>  
+  <description>Target bandwidth in kilobits per sec for each mapper instance. This is used to adjust the number of 
+  fetching threads automatically (up to fetcher.maxNum.threads). A value of -1 deactivates the functionality, in which case
+  the number of fetching threads is fixed (see fetcher.threads.fetch).</description>
+</property>
+
+<property>
+  <name>fetcher.maxNum.threads</name>
+  <value>25</value>  
+  <description>Max number of fetch threads allowed when using fetcher.bandwidth.target. Defaults to fetcher.threads.fetch if unspecified or
+  set to a value lower than it. </description>
+</property>
+
+<property>
+  <name>fetcher.bandwidth.target.check.everyNSecs</name>
+  <value>30</value>  
+  <description>(EXPERT) Value in seconds which determines how frequently we should reassess the optimal number of fetch threads when using
+   fetcher.bandwidth.target. Defaults to 30 and must be at least 1.</description>
 </property>
 
 <!-- moreindexingfilter plugin properties -->
@@ -1088,13 +1135,6 @@
 </property>
 
 <property>
-  <name>parser.fix.embeddedparams</name>
-  <value>true</value>
-  <description>Whether to fix URL embedded params using semi-colons.
-  See NUTCH-436 and NUTCH-1115</description>
-</property>
-
-<property>
   <name>htmlparsefilter.order</name>
   <value></value>
   <description>The order by which HTMLParse filters are applied.
@@ -1304,12 +1344,12 @@
 <!-- parse-metatags plugin properties -->
 <property>
   <name>metatags.names</name>
-  <value>description;keywords</value>
-  <description> Names of the metatags to extract, separated by;. 
+  <value>description,keywords</value>
+  <description> Names of the metatags to extract, separated by ','.
   Use '*' to extract all metatags. Prefixes the names with 'metatag.'
   in the parse-metadata. For instance to index description and keywords, 
   you need to activate the plugin index-metadata and set the value of the 
-  parameter 'index.parse.md' to 'metatag.description;metatag.keywords'.
+  parameter 'index.parse.md' to 'metatag.description,metatag.keywords'.
   </description>
 </property>
 
